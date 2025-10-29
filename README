@@ -1,0 +1,62 @@
+# 🌎 Earthquake Visualizer
+
+
+## Overview
+A clean, responsive React app built with **Tailwind CSS** and **React-Leaflet** to visualize recent earthquakes around the world using the **USGS Earthquake API**.
+
+
+### Features
+- Interactive map (Leaflet) with zoom & popups
+- Circle markers sized by magnitude and colored by depth
+- Slider to filter earthquakes by minimum magnitude
+- Responsive UI (works on both mobile and desktop)
+- Graceful error handling and loading states
+
+
+## API Used
+**USGS Earthquake API:**
+```
+https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson
+```
+
+
+## How to Deploy
+
+
+### 🔹 1. CodeSandbox / StackBlitz
+1. Go to [https://codesandbox.io/](https://codesandbox.io/) or [https://stackblitz.com/](https://stackblitz.com/)
+2. Create a new **Vite + React** sandbox.
+3. Add dependencies: `react-leaflet`, `leaflet`, `tailwindcss`.
+4. Copy all files from this project.
+5. Click **Share → Live** to get your deployed URL.
+
+
+### 🔹 2. Netlify
+1. Push your project to GitHub.
+2. Go to [https://app.netlify.com/](https://app.netlify.com/).
+3. Click **Add new site → Import from GitHub**.
+4. Choose your repo → Build command: `npm run build`, Publish directory: `dist`.
+5. Click **Deploy Site**.
+
+
+### 🔹 3. Vercel
+1. Install Vercel CLI or use the web dashboard.
+2. Run `vercel` in your project directory.
+3. It automatically detects Vite → deploys your site with a unique URL.
+
+
+## Testing Checklist
+- ✅ Tested on mobile & desktop (responsive)
+- ✅ Checked marker interactivity & popups
+- ✅ Handles API/network failure
+- ✅ Clean, readable code with comments
+
+
+## Submission (as per Aganitha instructions)
+- **Level 1:** Share your ChatGPT link documenting how you approached the problem.
+- **Level 2:** Share deployed app link (e.g., CodeSandbox / Netlify).
+- **Level 3:** Share your GitHub repo or zipped project with README and comments.
+
+
+---
+**Candidate ID:** Naukri1025
