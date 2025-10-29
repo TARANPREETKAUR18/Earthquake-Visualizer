@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Casey</title>
+    <!-- React and ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Leaflet CSS and JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        :root {
+            /* layout sizes */
+            --header-height: 64px; /* used for map height calc */
+            --footer-height: 44px;
+            
+            /* active/inactive region colors */
+            --region-active: inherit;
+            --region-inactive: #666;
+
+            /* light mode defaults */
+            --bg: #f8fafc;
+            --text: #0f172a;
+            --header-bg: #f1f5f9;
+            --header-text: #0f172a;
+            --muted: #64748b;
+            --marker-shallow: #ff7f00; /* orange for shallow */
+            --marker-mid: #ffff00;
+            --marker-deep: #ff9900;
+            --marker-deeper: #ff0000;
+        }
+
+        body.dark {
+            /* dark mode overrides */
+            --bg: #0b1220;
+            --text: #e6eef8;
+            --header-bg: #0f1724;
+            --header-text: #e6eef8;
+            --muted: #94a3b8;
+            --marker-shallow: #ff7f00;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { height: 100%; }
+        body { background: var(--bg); color: var(--text); font-family: Inter, system-ui, Arial, sans-serif; }
+        .h-screen { height: 100vh; }
+        .flex { display: flex; }
+        .flex-col { flex-direction: column; }
+        .flex-1 { flex: 1; }
+        .relative { position: relative; }
+        .p-4 { padding: 1rem; }
+        .text-white { color: var(--header-text); }
+        .bg-gray-800 { background-color: var(--header-bg); }
+
+        /* header/footer sizing and responsive layout */
+        header { height: var(--header-height); padding: 8px 16px; display: flex; align-items: center; }
+        header .controls { display: flex; gap: 12px; align-items: center; width: 100%; justify-content: space-between; }
+        header .controls .left { display: flex; gap: 12px; align-items: center; }
+        footer { height: var(--footer-height); display: flex; align-items: center; padding: 8px 16px; }
+
+        /* map area fills remaining space (accounting for header/footer) */
+        #map { width: 100%; height: calc(100vh - var(--header-height) - var(--footer-height)); }
+
+        /* controls and touch targets */
+        .theme-btn { padding: 8px 12px; border-radius: 8px; border: none; background: rgba(0,0,0,0.06); cursor: pointer; color: var(--header-text); }
+        input[type="range"] { height: 28px; }
+
+        /* leaflet popup responsiveness */
+        .leaflet-popup-content-wrapper { max-width: 260px; }
+
+        /* small screens: make controls responsive but keep theme button at right */
+        @media (max-width: 640px) {
+            :root { --header-height: 120px; --footer-height: 56px; }
+            header { padding: 12px; align-items: flex-start; }
+            /* allow wrapping; left group takes full width, right (button) stays auto-sized on the right */
+            header .controls { flex-wrap: wrap; gap: 10px; }
+            header .controls .left { flex: 1 1 100%; flex-direction: column; align-items: stretch; }
+            header .controls .right { flex: 0 0 auto; margin-left: auto; }
+            input[type="range"] { width: 100% !important; }
+            .theme-btn { width: auto; }
+            .leaflet-popup-content-wrapper { max-width: 320px; }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        function App() {
+            const [loading, setLoading] = React.useState(true);
+            const [error, setError] = React.useState(null);
+            const [minMag, setMinMag] = React.useState(0);
+            const [earthquakeData, setEarthquakeData] = React.useState([]);
+            const [map, setMap] = React.useState(null);
+            const [markers, setMarkers] = React.useState([]);
+            const [theme, setTheme] = React.useState('dark');
+            const tileLayerRef = React.useRef(null);
+            const [region, setRegion] = React.useState('all');
+            const [timeRange, setTimeRange] = React.useState('24h');
+            const [activeRegions, setActiveRegions] = React.useState(new Set(['all']));
+
+            // predefined region bounding boxes [minLng, minLat, maxLng, maxLat]
+            const regionBoxes = {
+                all: { bounds: [-180, -90, 180, 90], center: [20, 0], zoom: 2, label: 'Worldwide' },
+                asia: { bounds: [26, -11, 180, 81], center: [34.047863, 100.619655], zoom: 3, label: 'Asia' },
+                europe: { bounds: [-25, 34, 45, 72], center: [54.526, 15.2551], zoom: 4, label: 'Europe' },
+                'north-america': { bounds: [-170, 5, -50, 83], center: [40.7306, -73.9352], zoom: 3, label: 'North America' },
+                'south-america': { bounds: [-82, -56, -34, 13], center: [-14.235, -51.925], zoom: 3, label: 'South America' },
+                africa: { bounds: [-25, -35, 51, 38], center: [9.1021, 18.2812], zoom: 3, label: 'Africa' },
+                oceania: { bounds: [110, -50, 180, 10], center: [-25.2744, 133.7751], zoom: 3, label: 'Oceania' },
+                antarctica: { bounds: [-180, -90, 180, -60], center: [-82.8628, 135], zoom: 3, label: 'Antarctica' }
+            };
+
+            // time ranges mapping to milliseconds (0 means all)
+            const timeMs = {
+                '1h': 1000 * 60 * 60,
+                '6h': 1000 * 60 * 60 * 6,
+                '24h': 1000 * 60 * 60 * 24,
+                all: 0
+            };
+
+            // helper to choose tile URL + attribution per theme
+            const getTileUrl = (t) => {
+                // use dark tiles for dark theme, light tiles otherwise
+                return t === 'dark'
+                    ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'
+                    : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+            };
+
+            const getTileAttribution = (t) => {
+                if (t === 'dark') {
+                    return '&copy; <a href="https://carto.com/attributions">CARTO</a> contributors';
+                }
+                return '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+            };
+
+            React.useEffect(() => {
+                // apply theme class to body so CSS variables take effect
+                if (theme === 'dark') {
+                    document.body.classList.add('dark');
+                } else {
+                    document.body.classList.remove('dark');
+                }
+            }, [theme]);
+
+            React.useEffect(() => {
+                // Initialize map
+                const mapInstance = L.map('map').setView([20, 0], 2);
+                // create initial tile layer according to current theme
+                const initialLayer = L.tileLayer(getTileUrl(theme), {
+                    attribution: getTileAttribution(theme)
+                }).addTo(mapInstance);
+                tileLayerRef.current = initialLayer;
+                setMap(mapInstance);
+
+                // Fetch earthquake data
+                fetch('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson')
+                    .then(res => res.json())
+                    .then(data => {
+                        setEarthquakeData(data.features);
+                        setLoading(false);
+                    })
+                    .catch(err => {
+                        setError('Failed to load earthquake data');
+                        setLoading(false);
+                    });
+
+                return () => {
+                    try { if (tileLayerRef.current) { mapInstance.removeLayer(tileLayerRef.current); tileLayerRef.current = null; } } catch (e) {}
+                    mapInstance.remove();
+                };
+            }, []);
+
+            // swap tile layer when theme changes
+            React.useEffect(() => {
+                if (!map) return;
+                // remove existing
+                try { if (tileLayerRef.current) { map.removeLayer(tileLayerRef.current); tileLayerRef.current = null; } } catch (e) {}
+                const newLayer = L.tileLayer(getTileUrl(theme), { attribution: getTileAttribution(theme) }).addTo(map);
+                tileLayerRef.current = newLayer;
+                // ensure map reflows
+                setTimeout(() => { try { map.invalidateSize(); } catch (e) {} }, 200);
+            }, [theme, map]);
+
+            // keep map size correct on window resize / orientation change
+            React.useEffect(() => {
+                if (!map) return;
+                const handler = () => {
+                    try { map.invalidateSize(); } catch (e) { /* ignore */ }
+                };
+                window.addEventListener('resize', handler);
+                window.addEventListener('orientationchange', handler);
+                // call once to ensure correct sizing
+                setTimeout(handler, 250);
+                return () => {
+                    window.removeEventListener('resize', handler);
+                    window.removeEventListener('orientationchange', handler);
+                };
+            }, [map]);
+
+            React.useEffect(() => {
+                if (!map || !earthquakeData) return;
+
+                // Clear existing markers
+                markers.forEach(marker => marker.remove());
+
+                // Calculate which regions have active earthquakes
+                const now = Date.now();
+                const cutoff = timeMs[timeRange] ? (now - timeMs[timeRange]) : 0;
+                const box = regionBoxes[region] || regionBoxes.all;
+                
+                // Find regions with earthquakes in the current time window
+                const activeRegionsSet = new Set(['all']);
+                earthquakeData.forEach(f => {
+                    const t = f.properties.time ?? 0;
+                    const mag = f.properties.mag ?? 0;
+                    if (mag < minMag) return;
+                    if (timeMs[timeRange] && timeMs[timeRange] > 0 && t < cutoff) return;
+                    
+                    const [lng, lat] = f.geometry.coordinates;
+                    Object.entries(regionBoxes).forEach(([regionKey, regionData]) => {
+                        const [minLng, minLat, maxLng, maxLat] = regionData.bounds;
+                        if (lng >= minLng && lng <= maxLng && lat >= minLat && lat <= maxLat) {
+                            activeRegionsSet.add(regionKey);
+                        }
+                    });
+                });
+                setActiveRegions(activeRegionsSet);
+
+                const newMarkers = earthquakeData
+                    .filter(f => {
+                        const mag = f.properties.mag ?? 0;
+                        if (mag < minMag) return false;
+                        const t = f.properties.time ?? 0;
+                        if (timeMs[timeRange] && timeMs[timeRange] > 0 && t < cutoff) return false;
+                        const [lng, lat] = f.geometry.coordinates;
+                        const [minLng, minLat, maxLng, maxLat] = box.bounds;
+                        if (lng < minLng || lng > maxLng || lat < minLat || lat > maxLat) return false;
+                        return true;
+                    })
+                    .map(f => {
+                        const [lng, lat, depth] = f.geometry.coordinates;
+                        const { mag, place, time } = f.properties;
+                        
+                        const getColor = (depth) => {
+                            // read marker colors from CSS variables so they follow theme
+                            const s = getComputedStyle(document.body);
+                            const shallow = (s.getPropertyValue('--marker-shallow') || '#ff7f00').trim();
+                            const mid = (s.getPropertyValue('--marker-mid') || '#ffff00').trim();
+                            const deep = (s.getPropertyValue('--marker-deep') || '#ff9900').trim();
+                            const deeper = (s.getPropertyValue('--marker-deeper') || '#ff0000').trim();
+
+                            if (depth < 10) return shallow;
+                            if (depth < 50) return mid;
+                            if (depth < 100) return deep;
+                            return deeper;
+                        };
+
+                        const marker = L.circleMarker([lat, lng], {
+                            radius: Math.max(6, mag * 3),
+                            color: getColor(depth),
+                            fillColor: getColor(depth),
+                            fillOpacity: 0.7
+                        }).addTo(map);
+
+                        marker.bindPopup(`
+                            <div style="font-size: 14px">
+                                <h3 style="font-weight: bold">M ${mag} — ${place}</h3>
+                                <p>Depth: ${depth} km</p>
+                                <p>Time: ${new Date(time).toUTCString()}</p>
+                                <a href="https://earthquake.usgs.gov/earthquakes/eventpage/${f.id}" 
+                                   target="_blank" 
+                                   style="color: #3b82f6; text-decoration: underline">
+                                    View Details
+                                </a>
+                            </div>
+                        `);
+
+                        return marker;
+                    });
+
+                setMarkers(newMarkers);
+            }, [map, earthquakeData, minMag]);
+
+            return (
+                <div className="h-screen flex flex-col">
+                    <header className="bg-gray-800 text-white p-4">
+                        <div className="controls">
+                            <div className="left">
+                                <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                                    <label style={{ fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        Min Magnitude: <span style={{ fontWeight: 'bold' }}>{minMag}</span>
+                                        <input
+                                            type="range"
+                                            min="0"
+                                            max="7"
+                                            step="0.1"
+                                            value={minMag}
+                                            onChange={(e) => setMinMag(parseFloat(e.target.value))}
+                                            style={{ width: '160px' }}
+                                        />
+                                    </label>
+
+                                    <label style={{ fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        Region:
+                                        <select 
+                                            value={region} 
+                                            onChange={(e) => {
+                                                const newRegion = e.target.value;
+                                                setRegion(newRegion);
+                                                // Zoom map to the selected region
+                                                if (map && regionBoxes[newRegion]) {
+                                                    const { center, zoom } = regionBoxes[newRegion];
+                                                    map.setView(center, zoom, { animate: true });
+                                                }
+                                            }}
+                                            style={{ padding: '6px', borderRadius: 6, minWidth: '140px' }}
+                                        >
+                                            {Object.entries(regionBoxes).map(([key, data]) => (
+                                                <option 
+                                                    key={key} 
+                                                    value={key}
+                                                    style={{
+                                                        color: activeRegions.has(key) ? 'var(--region-active)' : 'var(--region-inactive)',
+                                                        fontWeight: activeRegions.has(key) ? 'bold' : 'normal'
+                                                    }}
+                                                >
+                                                    {data.label}
+                                                    {activeRegions.has(key) && key !== 'all' ? ' (active)' : ''}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </label>
+
+                                    <label style={{ fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        Time:
+                                        <select 
+                                            value={timeRange} 
+                                            onChange={(e) => {
+                                                setTimeRange(e.target.value);
+                                                setRegion('all'); // Reset to worldwide view when changing time
+                                                if (map) {
+                                                    const { center, zoom } = regionBoxes.all;
+                                                    map.setView(center, zoom, { animate: true });
+                                                }
+                                            }} 
+                                            style={{ padding: '6px', borderRadius: 6 }}
+                                        >
+                                            <option value="1h">Last 1 hour</option>
+                                            <option value="6h">Last 6 hours</option>
+                                            <option value="24h">Last 24 hours</option>
+                                            <option value="all">All</option>
+                                        </select>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div className="right">
+                                <button
+                                    className="theme-btn"
+                                    onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+                                    title="Toggle light / dark"
+                                >
+                                    {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+                                </button>
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="flex-1 relative">
+                        {loading && (
+                            <div style={{ 
+                                position: 'absolute', 
+                                inset: 0, 
+                                display: 'flex', 
+                                alignItems: 'center', 
+                                justifyContent: 'center',
+                                backgroundColor: 'rgba(0,0,0,0.5)',
+                                color: 'white'
+                            }}>
+                                Loading data...
+                            </div>
+                        )}
+                        {error && (
+                            <div style={{ 
+                                position: 'absolute', 
+                                top: '12px', 
+                                left: '12px',
+                                padding: '8px 12px',
+                                backgroundColor: '#fee2e2',
+                                color: '#991b1b',
+                                borderRadius: '4px',
+                                boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+                            }}>
+                                {error}
+                            </div>
+                        )}
+                        <div id="map"></div>
+                    </main>
+
+                    <footer className="bg-gray-800" style={{ color: '#9ca3af', fontSize: '12px', padding: '8px 16px', display: 'flex', justifyContent: 'space-between' }}>
+                        <p>Data: USGS Earthquake API (24h feed)</p>
+                        <p>Candidate ID: Naukri1025</p>
+                    </footer>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
